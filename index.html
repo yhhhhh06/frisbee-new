@@ -194,4 +194,5 @@
         function saveToHistory() {
             const history = JSON.parse(localStorage.getItem('frisbee_logs') || '[]');
             history.unshift({ date: new Date().toLocaleDateString(), count: repCount });
+
             localStorage.setItem('frisbee_logs
