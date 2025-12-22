@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frisbee Pro 4.0 - 全能競技與訓練系統</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <style>
+        :root { --primary: #00d2ff; --accent: #3a7bd5; --success: #00f260; --danger: #ff4b2b; --dark: #0f0f0f; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--dark); color: white; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        
+        /* 頂部導航 */
+        .app-header { padding: 15px; text-align: center; background: linear-gradient(135deg, var(--primary), var(--accent)); width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        
+        .main-container { display: grid; grid-template-columns: 1fr 380px; gap: 20px; width: 96%; max-width: 1400px; margin: 20px 0; }
+        
+        /* 視訊區 */
+        #display-box { position: relative; background: #000; border-radius: 20px; overflow: hidden; aspect-ratio: 16/9; box-shadow: 0 0 50px rgba(0,210,255,0.2); }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 教練反饋與數據浮層 */
+        .overlay-tag { position: absolute; background: rgba(0,0,0,0.7); padding: 10px 18px; border-radius: 12px; border-left: 5px solid var(--primary); z-index: 10; font-weight: bold; }
+        #coach-feedback { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 60%; text-align: center; background: rgba(255, 75, 43, 0.9); border: none; color: white; display: none; padding: 15px; border-radius: 10px; z-index: 20; animation: shake 0.5s; }
+        
+        /* 側邊欄 */
+        .sidebar { display: flex; flex-direction: column; gap: 15px; }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 15px; border: 1px solid #333; }
+        .card h3 { margin-top: 0; color: var(--primary); font-size: 1.2em; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        
+        /* 按鈕與列表 */
+        button, .file-btn { background: var(--accent); border: none; padding: 12px; color: white; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; transition: 0.3s; margin-top: 5px; }
+        button:hover { filter: brightness(1.2); }
+        .leaderboard, .history-list { list-style: none; padding: 0; margin: 0; font-size: 0.95em; }
+        .leaderboard li, .history-list li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #222; }
+        
+        @keyframes shake { 0%, 100% {transform: translateX(-50%);} 25% {transform: translateX(-52%);} 75% {transform: translateX(-48%);} }
+    </style>
+</head>
+<body>
+
+    <header class="app-header">
+        <h1>🥏 Frisbee AI Pro - 終極練習助手</h1>
+        <div>當前使用者: <span id="user-name">載入中...</span></div>
+    </header>
+
+    <div class="main-container">
+        <section>
+            <div id="display-box">
+                <div id="coach-feedback">⚠️ 警告：手肘過彎！請伸直後再投擲</div>
+                
+                <div class="overlay-tag" style="top: 20px; left: 20px;">
+                    次數：<span id="rep-count" style="font-size: 1.8em; color: var(--success);">0</span>
+                </div>
+                <div class="overlay-tag" style="top: 80px; left: 20px;">
+                    角度：<span id="live-angle">0°</span>
+                </div>
+
+                <video id="input_video" playsinline></video>
+                <canvas id="output_canvas"></canvas>
+            </div>
+
+            <div class="card" style="margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+                <button onclick="setupCamera()">📹 開啟攝像頭</button>
+                <label class="file-btn" style="text-align: center;">
+                    📁 上傳影片
+                    <input type="file" hidden accept="video/*" onchange="loadFile(event)">
+                </label>
+                <button style="background: var(--danger);" onclick="saveToHistory()">💾 儲存今日練習</button>
+            </div>
+        </section>
+
+        <aside class="sidebar">
+            <div class="card">
+                <h3>🏆 即時雲端對戰 (Global)</h3>
+                <ul id="leaderboard" class="leaderboard">
+                    <li>請先開啟攝像頭以連線...</li>
+                </ul>
+                <button onclick="joinRoom()" style="background: linear-gradient(45deg, #f83600, #fe8c00);">連線對戰房間</button>
+            </div>
+
+            <div class="card">
+                <h3>📜 歷史練習數據</h3>
+                <ul id="history-list" class="history-list">
+                    <li style="color:#666">暫無紀錄</li>
+                </ul>
+                <button onclick="clearHistory()" style="background: #444; font-size: 0.8em;">清除紀錄</button>
+            </div>
+
+            <div class="card" style="border-left: 5px solid var(--success);">
+                <h3>💡 教練小提醒</h3>
+                <p id="coach-hint" style="font-size: 0.9em; line-height: 1.6;">準備好後，請站在距離鏡頭 2-3 公尺處，露出全身骨架即可開始計次。</p>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // --- 1. Firebase 初始化 (請替換為你的設定) ---
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+            projectId: "YOUR_PROJECT",
+            appId: "YOUR_APP_ID"
+        };
+        // 若未填寫設定，將只運行單機功能
+        let db = null;
+        if(firebaseConfig.apiKey !== "YOUR_API_KEY") {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.database();
+        }
+
+        const myName = "Player_" + Math.floor(Math.random() * 1000);
+        document.getElementById('user-name').innerText = myName;
+
+        // --- 2. 變量設定 ---
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const feedbackEl = document.getElementById('coach-feedback');
+        
+        let repCount = 0;
+        let isArmBent = false;
+        let trajectory = []; // 儲存軌跡點
+
+        // --- 3. MediaPipe Pose 設定 ---
+        const pose = new Pose({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}` });
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6 });
+        pose.onResults(onResults);
+
+        // --- 4. 核心處理邏輯 ---
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.poseLandmarks) {
+                // A. 繪製骨架
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#FFFFFF', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#00d2ff', radius: 3});
+
+                // B. 計算手肘角度 (肩12, 肘14, 腕16)
+                const angle = calculateAngle(results.poseLandmarks[12], results.poseLandmarks[14], results.poseLandmarks[16]);
+                document.getElementById('live-angle').innerText = `${Math.round(angle)}°`;
+
+                // C. 教練糾正邏輯 (告知錯誤)
+                if (angle < 130) {
+                    feedbackEl.style.display = 'block';
+                    isArmBent = true; // 標記為已彎曲，準備下一次計次
+                } else {
+                    feedbackEl.style.display = 'none';
+                    // 計次判定：若先前已彎曲，現在伸直(>160)，則計次+1
+                    if (isArmBent && angle > 165) {
+                        repCount++;
+                        document.getElementById('rep-count').innerText = repCount;
+                        isArmBent = false;
+                        syncScore(repCount); // 同步到雲端
+                    }
+                }
+
+                // D. 軌跡追蹤 (追蹤右手腕 16)
+                const wrist = results.poseLandmarks[16];
+                trajectory.push({x: wrist.x * canvasElement.width, y: wrist.y * canvasElement.height});
+                if (trajectory.length > 25) trajectory.shift();
+                drawTrajectory();
+            }
+            canvasCtx.restore();
+        }
+
+        // --- 5. 工具函式 ---
+        function drawTrajectory() {
+            if (trajectory.length < 2) return;
+            canvasCtx.beginPath();
+            canvasCtx.strokeStyle = '#00f260'; // 綠色軌跡
+            canvasCtx.lineWidth = 6;
+            canvasCtx.lineCap = 'round';
+            canvasCtx.moveTo(trajectory[0].x, trajectory[0].y);
+            trajectory.forEach(p => canvasCtx.lineTo(p.x, p.y));
+            canvasCtx.stroke();
+        }
+
+        function calculateAngle(A, B, C) {
+            let rad = Math.atan2(C.y - B.y, C.x - B.x) - Math.atan2(A.y - B.y, A.x - B.x);
+            let deg = Math.abs(rad * 180 / Math.PI);
+            return deg > 180 ? 360 - deg : deg;
+        }
+
+        // --- 6. 雲端與存儲 ---
+        function syncScore(s) {
+            if (db) db.ref('global_room/' + myName).set({ score: s, time: Date.now() });
+        }
+
+        function joinRoom() {
+            if (!db) return alert("請先在代碼中配置 Firebase Config！");
+            db.ref('global_room').on('value', (snap) => {
+                const data = snap.val() || {};
+                const list = document.getElementById('leaderboard');
+                list.innerHTML = Object.entries(data)
+                    .sort((a,b) => b[1].score - a[1].score)
+                    .map(([name, info]) => `<li><span>${name}</span> <span>${info.score} 次</span></li>`).join('');
+            });
+        }
+
+        function saveToHistory() {
+            const history = JSON.parse(localStorage.getItem('frisbee_logs') || '[]');
+            history.unshift({ date: new Date().toLocaleString(), count: repCount });
+            localStorage.setItem('frisbee_logs', JSON.stringify(history.slice(0, 10)));
+            loadHistory();
+            alert("練習數據已儲存至本地歷史！");
+        }
+
+        function loadHistory() {
+            const history = JSON.parse(localStorage.getItem('frisbee_logs') || '[]');
+            const el = document.getElementById('history-list');
+            if (history.length > 0) {
+                el.innerHTML = history.map(h => `<li><span>${h.date.split(' ')[0]}</span> <span>${h.count}次</span></li>`).join('');
+            }
+        }
+
+        // --- 7. 硬體啟動 ---
+        async function setupCamera() {
+            const cam = new Camera(videoElement, { onFrame: async () => await pose.send({image: videoElement}), width: 1280, height: 720 });
+            cam.start();
+        }
+
+        function loadFile(event) {
+            const url = URL.createObjectURL(event.target.files[0]);
+            videoElement.src = url;
+            videoElement.play();
+            videoElement.onplay = () => {
+                async function process() { if(!videoElement.paused) { await pose.send({image:videoElement}); requestAnimationFrame(process); } }
+                process();
+            };
+        }
+
+        window.onload = loadHistory;
+    </script>
+</body>
+</html>
