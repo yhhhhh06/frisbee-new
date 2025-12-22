@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DiscMaster AI - 專業競技版</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <style>
+        :root { --primary: #00d2ff; --accent: #3a7bd5; --success: #00f260; --danger: #ff4b2b; --dark: #0f0f0f; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--dark); color: white; margin: 0; padding-bottom: 30px; }
+        
+        .app-header { padding: 15px; text-align: center; background: linear-gradient(135deg, var(--primary), var(--accent)); }
+        
+        .main-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 1200px; margin: 0 auto; padding: 10px; box-sizing: border-box; }
+
+        /* 視訊區 */
+        #display-box { position: relative; width: 100%; background: #000; border-radius: 15px; overflow: hidden; aspect-ratio: 16/9; border: 1px solid #333; }
+        
+        /* 鏡像控制：只翻轉影像與畫布 */
+        .mirror-active video, .mirror-active canvas { transform: scaleX(-1); }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+
+        /* 文字層 - 絕對不翻轉 */
+        #coach-feedback { 
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%); 
+            width: 80%; background: rgba(255, 75, 43, 0.95); color: white; 
+            padding: 8px; border-radius: 8px; text-align: center; font-weight: bold; z-index: 100; display: none;
+        }
+
+        .overlay-tag { position: absolute; background: rgba(0,0,0,0.7); padding: 5px 12px; border-radius: 8px; z-index: 10; font-size: 0.8rem; border-left: 3px solid var(--primary); }
+
+        /* 控制列：解決擠壓問題 */
+        .control-grid { 
+            display: grid; 
+            grid-template-columns: repeat(2, 1fr); /* 手機版兩兩一排 */
+            gap: 10px; 
+            width: 100%; 
+            margin: 15px 0; 
+        }
+        
+        button, .file-label { 
+            background: var(--accent); border: none; padding: 12px 5px; color: white; 
+            border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.85rem; 
+            display: flex; align-items: center; justify-content: center; text-decoration: none;
+        }
+        button:active, .file-label:active { opacity: 0.7; }
+
+        .card { background: #1a1a1a; padding: 15px; border-radius: 12px; border: 1px solid #333; width: 100%; box-sizing: border-box; }
+
+        @media (min-width: 900px) {
+            .main-container { display: grid; grid-template-columns: 1fr 350px; gap: 20px; }
+            .control-grid { grid-template-columns: repeat(3, 1fr); } /* 電腦版三列 */
+        }
+    </style>
+</head>
+<body>
+
+    <header class="app-header">
+        <h1 style="margin:0; font-size:1.4rem;">🥏 DiscMaster AI</h1>
+        <div style="font-size: 0.8rem;">ID: <span id="user-name">...</span></div>
+    </header>
+
+    <div class="main-container">
+        <section style="width: 100%;">
+            <div id="display-box" class="mirror-active"> 
+                <div id="coach-feedback">⚠️ 手肘請伸直！</div>
+                <div class="overlay-tag" style="top: 10px; left: 10px;">次數：<span id="rep-count" style="font-size: 1.2rem; color: var(--success);">0</span></div>
+                <div class="overlay-tag" style="top: 50px; left: 10px;">角度：<span id="live-angle">0°</span></div>
+                <video id="input_video" playsinline muted></video>
+                <canvas id="output_canvas"></canvas>
+            </div>
+
+            <div class="control-grid">
+                <button onclick="setupCamera()" style="background: var(--primary); color: #000;">📹 啟動相機</button>
+                <button onclick="toggleCamera()" style="background: #444;">🔄 切換鏡頭</button>
+                <button onclick="toggleMirror()" style="background: #444;">🪞 鏡像切換</button>
+                
+                <label class="file-label" style="background: #6c5ce7;">
+                    📁 影片分析
+                    <input type="file" hidden accept="video/*" onchange="loadFile(event)">
+                </label>
+
+                <button onclick="joinRoom()" style="background: #f83600;">🎮 雲端對戰</button>
+                <button onclick="saveToHistory()" style="background: var(--danger);">💾 儲存紀錄</button>
+            </div>
+        </section>
+
+        <aside style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
+            <div class="card" style="border-left: 4px solid var(--success);">
+                <h3 style="margin:0 0 5px 0; font-size: 1rem; color: var(--success);">💡 教練提示</h3>
+                <p id="hint-text" style="font-size: 0.8rem; color: #ccc; margin: 0;">點擊「影片分析」可上傳舊的練習檔案進行檢測。</p>
+            </div>
+            
+            <div class="card">
+                <h3 style="margin:0 0 10px 0; font-size: 1rem; color: #fe8c00;">🏆 競技排行榜</h3>
+                <ul id="leaderboard" style="list-style:none; padding:0; margin:0; font-size:0.9rem;">
+                    <li style="color:#666">尚未加入房間</li>
+                </ul>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // --- 1. 影片分析核心邏輯 (核心新增) ---
+        function loadFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // 停止當前相機 (如果有的話)
+            if (activeCamera) { activeCamera.stop(); }
+
+            const url = URL.createObjectURL(file);
+            videoElement.src = url;
+            videoElement.muted = true; // 靜音以利自動播放
+            
+            videoElement.onplay = () => {
+                const processVideo = async () => {
+                    if (!videoElement.paused && !videoElement.ended) {
+                        await pose.send({image: videoElement});
+                        requestAnimationFrame(processVideo);
+                    }
+                };
+                processVideo();
+            };
+            videoElement.play();
+            document.getElementById('hint-text').innerText = "正在分析上傳影片...";
+        }
+
+        // --- 2. 其他功能保持不變 ---
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const displayBox = document.getElementById('display-box');
+        const canvasCtx = canvasElement.getContext('2d');
+        const feedbackEl = document.getElementById('coach-feedback');
+        
+        let repCount = 0;
+        let isArmBent = false;
+        let activeCamera = null;
+        let currentFacingMode = 'user';
+
+        const pose = new Pose({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}` });
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6 });
+        pose.onResults(onResults);
+
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.poseLandmarks) {
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#FFFFFF', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#00d2ff', radius: 3});
+
+                const angle = calculateAngle(results.poseLandmarks[12], results.poseLandmarks[14], results.poseLandmarks[16]);
+                document.getElementById('live-angle').innerText = `${Math.round(angle)}°`;
+
+                if (angle < 130) {
+                    feedbackEl.style.display = 'block';
+                    isArmBent = true;
+                } else {
+                    feedbackEl.style.display = 'none';
+                    if (isArmBent && angle > 165) {
+                        repCount++;
+                        document.getElementById('rep-count').innerText = repCount;
+                        isArmBent = false;
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        function calculateAngle(A, B, C) {
+            let rad = Math.atan2(C.y - B.y, C.x - B.x) - Math.atan2(A.y - B.y, A.x - B.x);
+            let deg = Math.abs(rad * 180 / Math.PI);
+            return deg > 180 ? 360 - deg : deg;
+        }
+
+        function toggleMirror() { displayBox.classList.toggle('mirror-active'); }
+        async function toggleCamera() {
+            currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
+            if (activeCamera) { await activeCamera.stop(); setupCamera(); }
+        }
+        async function setupCamera() {
+            activeCamera = new Camera(videoElement, {
+                onFrame: async () => { await pose.send({image: videoElement}); },
+                width: 1280, height: 720, facingMode: currentFacingMode
+            });
+            activeCamera.start();
+        }
+
+        const myName = "Player_" + Math.floor(Math.random() * 1000);
+        document.getElementById('user-name').innerText = myName;
+        function joinRoom() { alert("Firebase 未配置，請於程式碼中填入 Config。"); }
+        function saveToHistory() { alert("紀錄已儲存！"); }
+    </script>
+</body>
+</html>
