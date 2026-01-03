@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DiscMaster AI - 專業運動分析系統</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+
+    <style>
+        :root {
+            --primary: #00d2ff;
+            --accent: #3a7bd5;
+            --success: #00f260;
+            --danger: #ff4b2b;
+            --dark: #0f0f0f;
+            --card-bg: #1a1a1a;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--dark);
+            color: white;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* 頂部導航 */
+        .app-header {
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            background: rgba(26, 26, 26, 0.95);
+            border-bottom: 1px solid #333;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .app-header h1 {
+            font-size: 1.2rem;
+            margin: 0;
+            background: linear-gradient(to right, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* 主容器佈局 */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            padding: 15px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* 影像區塊 */
+        .video-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 9/16;
+            background: #bd4545;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border: 1px solid #333;
+        }
+
+        /* 鏡像功能：只對內容，不對 UI */
+        .mirror-mode video,
+        .mirror-mode canvas {
+            transform: scaleX(1);
+        }
+
+        video,
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.4s ease;
+        }
+
+        /* UI 層 (文字永遠是正的) */
+        .video-ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .data-badge {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            padding: 10px 15px;
+            border-radius: 10px;
+            border-left: 4px solid var(--primary);
+            font-weight: bold;
+            font-size: 0.9rem;
+            pointer-events: auto;
+        }
+
+        #coach-warn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 75, 43, 0.9);
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-weight: 900;
+            color: white;
+            border: 2px solid white;
+            display: none;
+            animation: pulse 0.5s infinite alternate;
+        }
+
+        /* 按鈕網格 */
+        .control-panel {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button,
+        .upload-label {
+            background: var(--card-bg);
+            border: 1px solid #333;
+            color: white;
+            padding: 15px 5px;
+            border-radius: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+            font-size: 0.85rem;
+        }
+
+        button:hover {
+            background: #252525;
+            border-color: var(--primary);
+        }
+
+        .primary-btn {
+            background: var(--primary) !important;
+            color: #000 !important;
+            border: none !important;
+        }
+
+        /* 側邊資訊卡片 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .info-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid #333;
+        }
+
+        .info-card h3 {
+            margin: 0 0 15px 0;
+            font-size: 1rem;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .rank-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .rank-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #222;
+            font-size: 0.9rem;
+        }
+
+        /* --- 電腦版 RWD 調整 --- */
+        @media (min-width: 1024px) {
+            .main-layout {
+                grid-template-columns: 1fr 380px;
+                padding: 30px;
+                height: calc(100vh - 60px);
+            }
+
+            .control-panel {
+                grid-template-columns: repeat(3, 1fr);
+            }
+
+            .video-container {
+                height: auto;
+            }
+
+            .sidebar {
+                overflow-y: auto;
+                padding-right: 5px;
+            }
+        }
+
+        @keyframes pulse {
+            from {
+                transform: translate(-50%, -50%) scale(1);
+            }
+
+            to {
+                transform: translate(-50%, -50%) scale(1.05);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header class="app-header">
+        <h1>DiscMaster AI <span style="font-size: 0.7rem; opacity: 0.6;">v2.0 PRO</span></h1>
+        <div style="font-size: 0.8rem; border: 1px solid #444; padding: 4px 10px; border-radius: 20px;">
+            👤 <span id="display-name">Guest</span>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <main>
+            <div class="video-container mirror-mode" id="view-box">
+                <video id="input_video" playsinline muted></video>
+                <canvas id="output_canvas"></canvas>
+
+                <div class="video-ui">
+                    <div id="coach-warn">手臂請伸直！</div>
+                    <div class="data-badge" style="top:20px; left:20px;">
+                        REPS: <span id="rep-val" style="color:var(--success); font-size:1.5rem;">0</span>
+                    </div>
+                    <div class="data-badge" style="top:85px; left:20px;">
+                        ANGLE: <span id="ang-val">0°</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <button class="primary-btn" onclick="initCam()">📹 啟動鏡頭</button>
+                <button onclick="switchCam()">🔄 切換鏡頭</button>
+                <button onclick="toggleMirror()">🪞 鏡像模式</button>
+                <label class="upload-label" style="background: #34495e;">
+                    📁 影片分析
+                    <input type="file" hidden accept="video/*" onchange="processFile(event)">
+                </label>
+                <button onclick="alert('Firebase Config Required')" style="background: #e67e22;">🎮 雲端競技</button>
+                <button onclick="saveLog()" style="background: var(--danger);">💾 儲存數據</button>
+            </div>
+        </main>
+
+        <aside class="sidebar">
+            <div class="info-card">
+                <h3>💡 實時教練提示</h3>
+                <p id="tip-box" style="font-size: 0.85rem; color: #aaa; line-height: 1.6; margin: 0;">
+                    請將手機橫放或確保全身入鏡。當手肘彎曲小於 <span style="color:var(--primary)">135°</span> 時，系統會發出警示。
+                </p>
+            </div>
+
+            <div class="info-card">
+                <h3>🏆 競技排行榜</h3>
+                <ul class="rank-list" id="rank-ui">
+                    <li style="color:#666">尚未加入對戰房間...</li>
+                </ul>
+            </div>
+
+            <div class="info-card">
+                <h3>📜 最近練習紀錄</h3>
+                <ul class="rank-list" id="history-ui"></ul>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const videoEl = document.getElementById('input_video');
+        const canvasEl = document.getElementById('output_canvas');
+        const ctx = canvasEl.getContext('2d');
+        const warnEl = document.getElementById('coach-warn');
+
+        let count = 0;
+        let isBent = false;
+        let activeCam = null;
+        let mode = 'user';
+
+        // 1. 核心 AI 設定
+        const pose = new Pose({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}` });
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6 });
+        pose.onResults(onResults);
+
+        function onResults(res) {
+            canvasEl.width = videoEl.videoWidth;
+            canvasEl.height = videoEl.videoHeight;
+            ctx.save();
+            ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+            if (res.poseLandmarks) {
+                drawConnectors(ctx, res.poseLandmarks, POSE_CONNECTIONS, { color: '#FFFFFF', lineWidth: 2 });
+                drawLandmarks(ctx, res.poseLandmarks, { color: '#00d2ff', radius: 4 });
+
+                const angle = calcAngle(res.poseLandmarks[12], res.poseLandmarks[14], res.poseLandmarks[16]);
+                document.getElementById('ang-val').innerText = Math.round(angle) + '°';
+
+                // 教練警告邏輯
+                if (angle < 135) {
+                    warnEl.style.display = 'block';
+                    isBent = true;
+                } else {
+                    warnEl.style.display = 'none';
+                    if (isBent && angle > 160) {
+                        count++;
+                        document.getElementById('rep-val').innerText = count;
+                        isBent = false;
+                    }
+                }
+            }
+            ctx.restore();
+        }
+
+        function calcAngle(p1, p2, p3) {
+            let r = Math.atan2(p3.y - p2.y, p3.x - p2.x) - Math.atan2(p1.y - p2.y, p1.x - p2.x);
+            let d = Math.abs(r * 180 / Math.PI);
+            return d > 180 ? 360 - d : d;
+        }
+
+        // 2. 功能控制
+        function toggleMirror() { document.getElementById('view-box').classList.toggle('mirror-mode'); }
+
+        async function initCam() {
+            if (activeCam) await activeCam.stop();
+            activeCam = new Camera(videoEl, {
+                onFrame: async () => { await pose.send({ image: videoEl }); },
+                width: 1280, height: 720, facingMode: mode
+            });
+            activeCam.start();
+        }
+
+        function switchCam() { mode = (mode === 'user' ? 'environment' : 'user'); initCam(); }
+
+        function processFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (activeCam) activeCam.stop();
+            videoEl.src = URL.createObjectURL(file);
+            videoEl.play();
+            videoEl.onplay = () => {
+                const step = async () => {
+                    if (!videoEl.paused && !videoEl.ended) {
+                        await pose.send({ image: videoEl });
+                        requestAnimationFrame(step);
+                    }
+                };
+                step();
+            };
+        }
+
+        // 3. 初始設定
+        document.getElementById('display-name').innerText = "Player_" + Math.floor(Math.random() * 999);
+        window.onload = () => {
+            const logs = JSON.parse(localStorage.getItem('f_logs') || '[]');
+            document.getElementById('history-ui').innerHTML = logs.map(l => `<li><span>${l.d}</span><span>${l.c}次</span></li>`).join('');
+        };
+        function saveLog() {
+            const logs = JSON.parse(localStorage.getItem('f_logs') || '[]');
+            logs.unshift({ d: new Date().toLocaleDateString(), c: count });
+            localStorage.setItem('f_logs', JSON.stringify(logs.slice(0, 5)));
+            location.reload();
+        }
+    </script>
+</body>
+
+</html>
